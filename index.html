@@ -163,73 +163,48 @@
         },
       });
 
-      // 4) 디버그: 컨트롤러 pose 텍스트 (AR에서도 확인용)
-      AFRAME.registerComponent('debug-controller-poses', {
+      // 4) 각 컨트롤러 옆에 붙는 디버그 라벨
+      AFRAME.registerComponent('controller-debug-label', {
         schema: {
-          right: { type: 'selector', default: '#rightController' },
-          left: { type: 'selector', default: '#leftController' },
+          side: { type: 'string', default: 'R' }, // 'R' or 'L'
         },
 
         init() {
           const THREE = (this.THREE = AFRAME.THREE);
 
-          this.rightText = document.createElement('a-text');
-          this.rightText.setAttribute('color', '#00E5FF');
-          this.rightText.setAttribute('width', 1.8);
-          this.rightText.setAttribute('position', '-0.9 0.4 -1');
-          this.rightText.setAttribute('value', 'R: waiting...');
-          this.el.appendChild(this.rightText);
+          // 라벨 생성 (컨트롤러 로컬 좌표 기준 위치)
+          this.label = document.createElement('a-text');
+          this.label.setAttribute(
+            'color',
+            this.data.side === 'R' ? '#00E5FF' : '#FFB300'
+          );
+          this.label.setAttribute('width', 0.8);
+          this.label.setAttribute('align', 'center');
+          this.label.setAttribute('side', 'double');
+          // 컨트롤러 기준 살짝 위/앞
+          this.label.setAttribute('position', '0 0.06 0.05');
 
-          this.leftText = document.createElement('a-text');
-          this.leftText.setAttribute('color', '#FFB300');
-          this.leftText.setAttribute('width', 1.8);
-          this.leftText.setAttribute('position', '-0.9 0.1 -1');
-          this.leftText.setAttribute('value', 'L: waiting...');
-          this.el.appendChild(this.leftText);
+          this.el.appendChild(this.label);
 
           this.tmpPos = new THREE.Vector3();
           this.tmpQuat = new THREE.Quaternion();
-
-          // 상단 AR 모드 표시
-          this.banner = document.createElement('a-text');
-          this.banner.setAttribute('value', 'AR MODE ACTIVE');
-          this.banner.setAttribute('color', '#00FF7F');
-          this.banner.setAttribute('width', 1.5);
-          this.banner.setAttribute('position', '-0.5 0.7 -1.2');
-          this.el.appendChild(this.banner);
         },
 
         tick() {
-          const rightEl = this.data.right;
-          const leftEl = this.data.left;
+          const obj = this.el.object3D;
+          if (!obj) return;
 
-          if (rightEl && rightEl.object3D) {
-            rightEl.object3D.getWorldPosition(this.tmpPos);
-            rightEl.object3D.getWorldQuaternion(this.tmpQuat);
-            const p = this.tmpPos;
-            const q = this.tmpQuat;
-            this.rightText.setAttribute(
-              'value',
-              `R pos: ${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}
-R rot: ${q.x.toFixed(2)}, ${q.y.toFixed(2)}, ${q.z.toFixed(2)}, ${q.w.toFixed(2)}`
-            );
-          } else {
-            this.rightText.setAttribute('value', 'R: none');
-          }
+          obj.getWorldPosition(this.tmpPos);
+          obj.getWorldQuaternion(this.tmpQuat);
 
-          if (leftEl && leftEl.object3D) {
-            leftEl.object3D.getWorldPosition(this.tmpPos);
-            leftEl.object3D.getWorldQuaternion(this.tmpQuat);
-            const p = this.tmpPos;
-            const q = this.tmpQuat;
-            this.leftText.setAttribute(
-              'value',
-              `L pos: ${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}
-L rot: ${q.x.toFixed(2)}, ${q.y.toFixed(2)}, ${q.z.toFixed(2)}, ${q.w.toFixed(2)}`
-            );
-          } else {
-            this.leftText.setAttribute('value', 'L: none');
-          }
+          const p = this.tmpPos;
+
+          this.label.setAttribute(
+            'value',
+            `${this.data.side} ${p.x.toFixed(2)}, ${p.y.toFixed(
+              2
+            )}, ${p.z.toFixed(2)}`
+          );
         },
       });
     </script>
@@ -244,7 +219,6 @@ L rot: ${q.x.toFixed(2)}, ${q.y.toFixed(2)}, ${q.z.toFixed(2)}, ${q.w.toFixed(2)
       shadow="type: pcfsoft">
 
       <a-assets>
-        <!-- cup_profile.glb를 index.html과 같은 폴더에 둔 경우 -->
         <a-asset-item id="cupModel" src="cup_profile.glb"></a-asset-item>
       </a-assets>
 
@@ -253,18 +227,19 @@ L rot: ${q.x.toFixed(2)}, ${q.y.toFixed(2)}, ${q.z.toFixed(2)}, ${q.w.toFixed(2)
         <a-entity
           id="camera"
           camera
-          position="0 1.6 0"
-          debug-controller-poses="right: #rightController; left: #leftController">
+          position="0 1.6 0">
         </a-entity>
 
         <a-entity
           id="leftController"
-          meta-touch-controls="hand: left; model: true">
+          meta-touch-controls="hand: left; model: true"
+          controller-debug-label="side: L">
         </a-entity>
 
         <a-entity
           id="rightController"
-          meta-touch-controls="hand: right; model: true">
+          meta-touch-controls="hand: right; model: true"
+          controller-debug-label="side: R">
         </a-entity>
       </a-entity>
 
