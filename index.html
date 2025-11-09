@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Pure A-Frame AR Lathe (Quest 3)</title>
+
+    <!-- A-Frame 1.5.0 -->
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+
+    <script>
+      // 1) glb 프로파일을 LatheGeometry로 회전체 생성
+      AFRAME.registerComponent('lathe-profile', {
+        schema: {
+          segments: { type: 'int', default: 128 },
+          scale: { type: 'number', default: 1 },
+          flipY: { type: 'boolean', default: false },
+        },
+
+        init() {
+          this.el.addEventListener('model-loaded', (e) => {
+            const { THREE } = AFRAME;
+            const root = e.detail.model;
+
+            let geom = null;
+            root.traverse((o) => {
+              if (!geom && o.isMesh && o.geometry && o.geometry.attributes.position) {
+                geom = o.geometry;
+              }
+            });
+
+            if (!geom) {
+              console.warn('[lathe-profile] no geometry found in model');
+              return;
+            }
+
+            const pos = geom.attributes.position;
+            const pts = [];
+            const s = this.data.scale;
+            const flipY = this.data.flipY;
+
+            for (let i = 0; i < pos.count; i++) {
+              const x = pos.getX(i);
+              const y = pos.getY(i);
+              const z = pos.getZ(i);
+
+              const rVal = Math.sqrt(x * x + z * z);
+              if (!Number.isFinite(rVal)) continue;
+
+              const r = rVal * s;
+              let yy = y * s;
+              if (flipY) yy = -yy;
+
+              pts.push(new THREE.Vector2(r, yy));
+            }
+
+            if (pts.length < 2) {
+              console.warn('[lathe-profile] not enough points for lathe');
+              return;
+            }
+
+            pts.sort((a, b) => a.y - b.y);
+
+            const geo = new THREE.LatheGeometry(pts, this.data.segments);
+            const mat = new THREE.MeshStandardMaterial({
+              color: 0xffffff,
+              metalness: 0.1,
+              roughness: 0.35,
+            });
+
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.castShadow = true;
+            mesh.receiveShadow = false;
+
+            this.el.object3D.clear();
+            this.el.object3D.add(mesh);
+
+            console.log('[lathe-profile] lathe built:', pts.length, 'pts');
+          });
+        },
+      });
+
+      // 2) 오른손 컨트롤러 회전 변화량으로 latheRig 회전
+      AFRAME.registerComponent('lathe-axis-from-controller', {
+        schema: {
+          controller: { type: 'selector', default: '#rightController' },
+        },
+
+        init() {
+          const { THREE } = AFRAME;
+          this.THREE = THREE;
+
+          this.initialized = false;
+
+          this.startControllerQuat = new THREE.Quaternion();
+          this.invStartControllerQuat = new THREE.Quaternion();
+          this.startObjectQuat = new THREE.Quaternion();
+          this.deltaQuat = new THREE.Quaternion();
+          this.newQuat = new THREE.Quaternion();
+          this.worldCtrlQuat = new THREE.Quaternion();
+        },
+
+        tick() {
+          const controllerEl = this.data.controller;
+          if (!controllerEl || !controllerEl.object3D) return;
+
+          const controllerObj = controllerEl.object3D;
+          controllerObj.getWorldQuaternion(this.worldCtrlQuat);
+
+          if (!this.initialized) {
+            this.startControllerQuat.copy(this.worldCtrlQuat);
+            this.invStartControllerQuat.copy(this.startControllerQuat).invert();
+            this.startObjectQuat.copy(this.el.object3D.quaternion); // 초기(lathe 기본 축)
+            this.initialized = true;
+            return;
+          }
+
+          // Δq = q_start^-1 * q_current
+          this.deltaQuat.multiplyQuaternions(
+            this.invStartControllerQuat,
+            this.worldCtrlQuat
+          );
+
+          // 새 회전 = Δq * 초기 오브젝트 회전
+          this.newQuat.multiplyQuaternions(this.deltaQuat, this.startObjectQuat);
+          this.el.object3D.setRotationFromQuaternion(this.newQuat);
+        },
+      });
+
+      // 3) 오른손 컨트롤러 기준 offset 위치로 따라다니기
+      AFRAME.registerComponent('follow-controller-offset', {
+        schema: {
+          controller: { type: 'selector', default: '#rightController' },
+          offset: { type: 'vec3', default: { x: -0.3, y: 0.0, z: 0.0 } }, // 컨트롤러 왼쪽 살짝
+        },
+
+        init() {
+          const { THREE } = AFRAME;
+          this.THREE = THREE;
+
+          this.worldQuat = new THREE.Quaternion();
+          this.controllerPos = new THREE.Vector3();
+          this.offsetLocal = new THREE.Vector3();
+        },
+
+        tick() {
+          const controllerEl = this.data.controller;
+          if (!controllerEl || !controllerEl.object3D) return;
+
+          const controllerObj = controllerEl.object3D;
+
+          controllerObj.getWorldPosition(this.controllerPos);
+          controllerObj.getWorldQuaternion(this.worldQuat);
+
+          this.offsetLocal.set(
+            this.data.offset.x,
+            this.data.offset.y,
+            this.data.offset.z
+          );
+          this.offsetLocal.applyQuaternion(this.worldQuat);
+
+          this.controllerPos.add(this.offsetLocal);
+          this.el.object3D.position.copy(this.controllerPos);
+        },
+      });
+
+      // 4) 디버그: 컨트롤러 pose 텍스트 (AR에서도 확인용)
+      AFRAME.registerComponent('debug-controller-poses', {
+        schema: {
+          right: { type: 'selector', default: '#rightController' },
+          left: { type: 'selector', default: '#leftController' },
+        },
+
+        init() {
+          const THREE = (this.THREE = AFRAME.THREE);
+
+          this.rightText = document.createElement('a-text');
+          this.rightText.setAttribute('color', '#00E5FF');
+          this.rightText.setAttribute('width', 1.8);
+          this.rightText.setAttribute('position', '-0.9 0.4 -1');
+          this.rightText.setAttribute('value', 'R: waiting...');
+          this.el.appendChild(this.rightText);
+
+          this.leftText = document.createElement('a-text');
+          this.leftText.setAttribute('color', '#FFB300');
+          this.leftText.setAttribute('width', 1.8);
+          this.leftText.setAttribute('position', '-0.9 0.1 -1');
+          this.leftText.setAttribute('value', 'L: waiting...');
+          this.el.appendChild(this.leftText);
+
+          this.tmpPos = new THREE.Vector3();
+          this.tmpQuat = new THREE.Quaternion();
+
+          // 상단 AR 모드 표시
+          this.banner = document.createElement('a-text');
+          this.banner.setAttribute('value', 'AR MODE ACTIVE');
+          this.banner.setAttribute('color', '#00FF7F');
+          this.banner.setAttribute('width', 1.5);
+          this.banner.setAttribute('position', '-0.5 0.7 -1.2');
+          this.el.appendChild(this.banner);
+        },
+
+        tick() {
+          const rightEl = this.data.right;
+          const leftEl = this.data.left;
+
+          if (rightEl && rightEl.object3D) {
+            rightEl.object3D.getWorldPosition(this.tmpPos);
+            rightEl.object3D.getWorldQuaternion(this.tmpQuat);
+            const p = this.tmpPos;
+            const q = this.tmpQuat;
+            this.rightText.setAttribute(
+              'value',
+              `R pos: ${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}
+R rot: ${q.x.toFixed(2)}, ${q.y.toFixed(2)}, ${q.z.toFixed(2)}, ${q.w.toFixed(2)}`
+            );
+          } else {
+            this.rightText.setAttribute('value', 'R: none');
+          }
+
+          if (leftEl && leftEl.object3D) {
+            leftEl.object3D.getWorldPosition(this.tmpPos);
+            leftEl.object3D.getWorldQuaternion(this.tmpQuat);
+            const p = this.tmpPos;
+            const q = this.tmpQuat;
+            this.leftText.setAttribute(
+              'value',
+              `L pos: ${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}
+L rot: ${q.x.toFixed(2)}, ${q.y.toFixed(2)}, ${q.z.toFixed(2)}, ${q.w.toFixed(2)}`
+            );
+          } else {
+            this.leftText.setAttribute('value', 'L: none');
+          }
+        },
+      });
+    </script>
+  </head>
+
+  <body>
+    <a-scene
+      webxr="mode: ar; optionalFeatures: local-floor, bounded-floor"
+      renderer="colorManagement: true; physicallyCorrectLights: true; alpha: true"
+      background="color: #00000000"
+      vr-mode-ui="enabled: false"
+      shadow="type: pcfsoft">
+
+      <a-assets>
+        <!-- cup_profile.glb를 index.html과 같은 폴더에 둔 경우 -->
+        <a-asset-item id="cupModel" src="cup_profile.glb"></a-asset-item>
+      </a-assets>
+
+      <!-- XR Rig -->
+      <a-entity id="rig">
+        <a-entity
+          id="camera"
+          camera
+          position="0 1.6 0"
+          debug-controller-poses="right: #rightController; left: #leftController">
+        </a-entity>
+
+        <a-entity
+          id="leftController"
+          meta-touch-controls="hand: left; model: true">
+        </a-entity>
+
+        <a-entity
+          id="rightController"
+          meta-touch-controls="hand: right; model: true">
+        </a-entity>
+      </a-entity>
+
+      <!-- Lathe 오브젝트: 오른손 기준으로 따라다니고, 회전도 따라감 -->
+      <a-entity
+        id="latheRig"
+        lathe-axis-from-controller="controller: #rightController"
+        follow-controller-offset="controller: #rightController; offset: -0.3 0 0">
+
+        <a-entity
+          id="latheMesh"
+          gltf-model="#cupModel"
+          lathe-profile="segments:128; scale:0.8; flipY:false"
+          position="0 0 0"
+          shadow="cast: true">
+        </a-entity>
+      </a-entity>
+    </a-scene>
+  </body>
+</html>
